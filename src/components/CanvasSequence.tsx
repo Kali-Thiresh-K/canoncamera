@@ -11,21 +11,28 @@ interface CanvasSequenceProps {
   onProgress?: (progress: number) => void;
   onReady?: () => void;
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /** On mobile, skip every Nth frame to save memory/bandwidth. Default 1. */
+  frameStep?: number;
 }
 
 /* ─────────────────────── constants ─────────────────────── */
 
-const PRIORITY_FRAMES = 15;        // loaded in parallel before anything shows
-const BG_CONCURRENCY = 10;         // background loading concurrency
-const MAX_DPR = 1.5;               // cap device-pixel-ratio for GPU savings
-const WHEEL_SENSITIVITY = 0.0008;  // scroll-delta → progress mapping
-const CAMERA_SCALE = 0.90;         // scale-down: 90% of cover-fit size
+const PRIORITY_FRAMES = 15; // loaded in parallel before anything shows
+const BG_CONCURRENCY = 10; // background loading concurrency
+const MAX_DPR_DESKTOP = 1.5; // cap device-pixel-ratio for GPU savings
+const MAX_DPR_MOBILE = 1.0; // even lower on mobile
+const WHEEL_SENSITIVITY = 0.0008; // scroll-delta → progress mapping
+const TOUCH_SENSITIVITY = 0.003; // touch-delta → progress (more responsive)
+const CAMERA_SCALE = 0.9; // scale-down: 90% of cover-fit size
+const MOBILE_BREAKPOINT = 768;
 
 /* ─────────────────────── helpers ─────────────────────── */
 
 const supportsImageBitmap =
-  typeof createImageBitmap === "function" &&
-  typeof fetch === "function";
+  typeof createImageBitmap === "function" && typeof fetch === "function";
+
+const isMobileDevice = () =>
+  typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT;
 
 /** Load + decode a single frame off the main thread when possible. */
 function loadFrame(src: string): Promise<FrameImage | null> {
@@ -40,7 +47,12 @@ function loadFrame(src: string): Promise<FrameImage | null> {
     img.decoding = "async";
     img.onload = () => {
       if (typeof img.decode === "function") {
-        img.decode().then(() => resolve(img), () => resolve(img));
+        img
+          .decode()
+          .then(
+            () => resolve(img),
+            () => resolve(img),
+          );
       } else resolve(img);
     };
     img.onerror = () => resolve(null);
@@ -62,24 +74,27 @@ export const CanvasSequence = memo(function CanvasSequence({
   onProgress,
   onReady,
   containerRef,
+  frameStep = 1,
 }: CanvasSequenceProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   /* All mutable state lives in refs — zero React state, zero re-renders. */
   const framesRef = useRef<(FrameImage | null)[]>([]);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
-  const frameRef = useRef(0);          // target frame index
-  const displayRef = useRef(0);          // smoothed frame (float)
-  const drawnRef = useRef(-1);         // last drawn integer frame
+  const frameRef = useRef(0); // target frame index
+  const displayRef = useRef(0); // smoothed frame (float)
+  const drawnRef = useRef(-1); // last drawn integer frame
   const rafRef = useRef(0);
   const sizeRef = useRef({ w: 0, h: 0 });
   const readyRef = useRef(false);
-  const progressRef = useRef(0);          // 0..1 hover-scroll progress
-  const hoveringRef = useRef(false);
+  const progressRef = useRef(0); // 0..1 hover-scroll progress
   // Track the camera's drawn position on screen (CSS pixels, not canvas pixels)
   const drawBoundsRef = useRef({ x: 0, y: 0, w: 0, h: 0 });
   const cbRef = useRef({ onProgress, onReady });
   cbRef.current = { onProgress, onReady };
+
+  // Effective frame count after stepping
+  const effectiveCount = Math.ceil(frameCount / frameStep);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -94,7 +109,11 @@ export const CanvasSequence = memo(function CanvasSequence({
     if (!ctx) return;
 
     let cancelled = false;
-    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+    const mobile = isMobileDevice();
+    const dpr = Math.min(
+      window.devicePixelRatio || 1,
+      mobile ? MAX_DPR_MOBILE : MAX_DPR_DESKTOP,
+    );
 
     /* ─── sizing ─── */
     const resize = () => {
@@ -157,17 +176,17 @@ export const CanvasSequence = memo(function CanvasSequence({
     const render = () => {
       rafRef.current = 0;
       const i = Math.round(displayRef.current);
-      if (i === drawnRef.current) return;  // skip duplicate
+      if (i === drawnRef.current) return; // skip duplicate
 
       // Find the best available frame (fallback to nearest if target not loaded)
       let frame = framesRef.current[i];
       if (!frame) {
-        for (let offset = 1; offset < frameCount; offset++) {
+        for (let offset = 1; offset < effectiveCount; offset++) {
           if (i - offset >= 0 && framesRef.current[i - offset]) {
             frame = framesRef.current[i - offset];
             break;
           }
-          if (i + offset < frameCount && framesRef.current[i + offset]) {
+          if (i + offset < effectiveCount && framesRef.current[i + offset]) {
             frame = framesRef.current[i + offset];
             break;
           }
@@ -186,17 +205,17 @@ export const CanvasSequence = memo(function CanvasSequence({
 
     /* ─── loading ─── */
     const loadAll = async () => {
-      framesRef.current = new Array(frameCount).fill(null);
+      framesRef.current = new Array(effectiveCount).fill(null);
 
       // Phase 1: load priority frames in PARALLEL
-      const priorityEnd = Math.min(PRIORITY_FRAMES, frameCount);
+      const priorityEnd = Math.min(PRIORITY_FRAMES, effectiveCount);
       const priorityPromises: Promise<void>[] = [];
 
       for (let i = 0; i < priorityEnd; i++) {
         priorityPromises.push(
-          loadFrame(framePath(i)).then((f) => {
+          loadFrame(framePath(i * frameStep)).then((f) => {
             if (!cancelled && f) framesRef.current[i] = f;
-          })
+          }),
         );
       }
 
@@ -223,18 +242,18 @@ export const CanvasSequence = memo(function CanvasSequence({
       attachInteraction();
 
       // Phase 2: load remaining frames in background
-      if (priorityEnd < frameCount) {
+      if (priorityEnd < effectiveCount) {
         let cursor = priorityEnd;
         await Promise.all(
-          new Array(Math.min(BG_CONCURRENCY, frameCount - priorityEnd))
+          new Array(Math.min(BG_CONCURRENCY, effectiveCount - priorityEnd))
             .fill(0)
             .map(async () => {
-              while (!cancelled && cursor < frameCount) {
+              while (!cancelled && cursor < effectiveCount) {
                 const idx = cursor++;
-                const f = await loadFrame(framePath(idx));
+                const f = await loadFrame(framePath(idx * frameStep));
                 if (!cancelled && f) framesRef.current[idx] = f;
               }
-            })
+            }),
         );
       }
     };
@@ -252,66 +271,66 @@ export const CanvasSequence = memo(function CanvasSequence({
       return cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h;
     };
 
-    const onWheel = (e: WheelEvent) => {
-      if (!readyRef.current || !isOverCamera(e)) return;
-
+    const updateProgress = (delta: number) => {
       const prev = progressRef.current;
-      const delta = e.deltaY * WHEEL_SENSITIVITY;
       const next = Math.max(0, Math.min(1, prev + delta));
 
       // At boundaries, let the page scroll naturally
       if ((prev <= 0 && delta < 0) || (prev >= 1 && delta > 0)) {
-        return; // don't preventDefault — normal scroll
+        return false; // don't consume — normal scroll
       }
 
-      e.preventDefault();
       progressRef.current = next;
-      displayRef.current = next * (frameCount - 1);
+      displayRef.current = next * (effectiveCount - 1);
       cbRef.current.onProgress?.(next);
       scheduleRender();
+      return true;
     };
 
-    const onTouchStart = (() => {
-      let lastY = 0;
-      const handleStart = (e: TouchEvent) => {
-        lastY = e.touches[0].clientY;
-      };
-      const handleMove = (e: TouchEvent) => {
-        if (!readyRef.current || !hoveringRef.current) return;
-        const y = e.touches[0].clientY;
-        const delta = (lastY - y) * WHEEL_SENSITIVITY * 3;
-        lastY = y;
+    const onWheel = (e: WheelEvent) => {
+      if (!readyRef.current || !isOverCamera(e)) return;
 
-        const prev = progressRef.current;
-        const next = Math.max(0, Math.min(1, prev + delta));
-
-        if ((prev <= 0 && delta < 0) || (prev >= 1 && delta > 0)) return;
-
+      const delta = e.deltaY * WHEEL_SENSITIVITY;
+      if (updateProgress(delta)) {
         e.preventDefault();
-        progressRef.current = next;
-        displayRef.current = next * (frameCount - 1);
-        cbRef.current.onProgress?.(next);
-        scheduleRender();
-      };
-      return { handleStart, handleMove };
-    })();
-
-    const onMouseEnter = () => {
-      hoveringRef.current = true;
+      }
     };
 
-    const onMouseLeave = () => {
-      hoveringRef.current = false;
+    /* ─── touch interaction: always active on mobile ─── */
+    let touchLastY = 0;
+    let touchActive = false;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (!readyRef.current) return;
+      touchLastY = e.touches[0].clientY;
+      touchActive = true;
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!readyRef.current || !touchActive) return;
+      const y = e.touches[0].clientY;
+      const delta = (touchLastY - y) * TOUCH_SENSITIVITY;
+      touchLastY = y;
+
+      if (updateProgress(delta)) {
+        e.preventDefault();
+      }
+    };
+
+    const onTouchEnd = () => {
+      touchActive = false;
     };
 
     const attachInteraction = () => {
       if (cancelled) return;
-      // Listeners on CANVAS, not container — only captures when cursor is over the image
+
+      // Desktop: wheel on canvas only when cursor is over camera
       canvas.addEventListener("wheel", onWheel, { passive: false });
-      canvas.addEventListener("mouseenter", onMouseEnter);
-      canvas.addEventListener("mouseleave", onMouseLeave);
-      canvas.addEventListener("touchstart", onTouchStart.handleStart, { passive: true });
-      canvas.addEventListener("touchmove", onTouchStart.handleMove, { passive: false });
+
+      // Mobile: touch on the entire container for easy swiping
+      container.addEventListener("touchstart", onTouchStart, { passive: true });
+      container.addEventListener("touchmove", onTouchMove, { passive: false });
+      container.addEventListener("touchend", onTouchEnd, { passive: true });
     };
 
     /* ─── init ─── */
@@ -324,10 +343,9 @@ export const CanvasSequence = memo(function CanvasSequence({
       cancelled = true;
       window.removeEventListener("resize", resize);
       canvas.removeEventListener("wheel", onWheel);
-      canvas.removeEventListener("mouseenter", onMouseEnter);
-      canvas.removeEventListener("mouseleave", onMouseLeave);
-      canvas.removeEventListener("touchstart", onTouchStart.handleStart);
-      canvas.removeEventListener("touchmove", onTouchStart.handleMove);
+      container.removeEventListener("touchstart", onTouchStart);
+      container.removeEventListener("touchmove", onTouchMove);
+      container.removeEventListener("touchend", onTouchEnd);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = 0;
 
@@ -337,7 +355,7 @@ export const CanvasSequence = memo(function CanvasSequence({
       }
       framesRef.current = [];
     };
-  }, [frameCount, framePath, containerRef]);
+  }, [frameCount, framePath, containerRef, frameStep, effectiveCount]);
 
   return (
     <canvas
@@ -348,6 +366,7 @@ export const CanvasSequence = memo(function CanvasSequence({
         opacity: 0,
         transition: "opacity 0.4s ease-out",
         contain: "strict",
+        touchAction: "none", // prevent browser scroll interference on touch
       }}
       aria-hidden
     />

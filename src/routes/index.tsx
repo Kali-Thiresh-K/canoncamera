@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "
 import { motion, AnimatePresence, useScroll, useTransform } from "framer-motion";
 import { CanvasSequence } from "@/components/CanvasSequence";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -41,6 +42,7 @@ function HomePage() {
   const heroRef = useRef<HTMLDivElement>(null);
   const navRef = useRef<HTMLElement | null>(null);
   const reduced = useReducedMotion();
+  const mobile = useIsMobile();
 
   // Imperative bridge: scroll progress never touches React state.
   const overlayApi = useRef<((p: number) => void) | null>(null);
@@ -82,9 +84,10 @@ function HomePage() {
             frameCount={FRAME_COUNT}
             framePath={framePath}
             onProgress={handleProgress}
+            frameStep={mobile ? 2 : 1}
           />
           <HeroOverlays api={overlayApi} />
-          <ScrollHint />
+          <ScrollHint mobile={mobile} />
         </section>
       )}
 
@@ -365,7 +368,7 @@ const HeroOverlays = memo(function HeroOverlays({
 
 
 
-const ScrollHint = memo(function ScrollHint() {
+const ScrollHint = memo(function ScrollHint({ mobile }: { mobile: boolean }) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -375,7 +378,7 @@ const ScrollHint = memo(function ScrollHint() {
     >
       <div className="mx-auto mb-3 h-8 w-px bg-gradient-to-b from-transparent to-ink/60" />
       <span className="text-[10px] uppercase tracking-luxe text-ink-muted">
-        Scroll
+        {mobile ? "Swipe" : "Scroll"}
       </span>
     </motion.div>
   );
@@ -495,7 +498,7 @@ const ExplodedInteractive = memo(function ExplodedInteractive() {
             </h2>
           </div>
           <p className="hidden max-w-xs text-sm leading-relaxed text-ink-muted md:block">
-            Hover a marker to trace each component through the assembly.
+            Tap or hover a marker to trace each component through the assembly.
           </p>
         </div>
 
@@ -540,14 +543,15 @@ const Hotspot = memo(function Hotspot({
       style={{ left: `${h.x}%`, top: `${h.y}%` }}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
+      onClick={() => (active ? onLeave() : onEnter())} /* tap-to-toggle on mobile */
       onFocus={onEnter}
       onBlur={onLeave}
       tabIndex={0}
     >
       <div className="relative -translate-x-1/2 -translate-y-1/2">
         <span
-          className="block h-2 w-2 rounded-full bg-ink"
-          style={{ boxShadow: "0 0 0 4px rgba(243,240,235,0.12)" }}
+          className="block h-3 w-3 rounded-full bg-ink md:h-2 md:w-2"
+          style={{ boxShadow: "0 0 0 6px rgba(243,240,235,0.15)" }}
         />
         <AnimatePresence>
           {active && (
@@ -712,12 +716,14 @@ const FeatureRow = memo(function FeatureRow({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
+  const mobile = useIsMobile();
   const { scrollYProgress } = useScroll({
     target: ref,
     offset: ["start end", "end start"],
   });
   const yMotion = useTransform(scrollYProgress, [0, 1], [40, -40]);
-  const y = reduced ? 0 : yMotion;
+  // Disable parallax on mobile to avoid scroll jank
+  const y = (reduced || mobile) ? 0 : yMotion;
 
 
   return (
@@ -785,12 +791,14 @@ const GallerySection = memo(function GallerySection() {
 const GalleryItem = memo(function GalleryItem({ frame, tall }: { frame: number; tall: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
+  const mobile = useIsMobile();
   const { scrollYProgress } = useScroll({
     target: ref,
     offset: ["start end", "end start"],
   });
   const yMotion = useTransform(scrollYProgress, [0, 1], [30, -30]);
-  const y = reduced ? 0 : yMotion;
+  // Disable parallax on mobile to avoid scroll jank
+  const y = (reduced || mobile) ? 0 : yMotion;
   return (
     <motion.div
       ref={ref}
@@ -821,7 +829,7 @@ const ReserveSection = memo(function ReserveSection() {
         <p className="mb-8 text-[10px] uppercase tracking-luxe text-ink-muted">
           — Available Soon
         </p>
-        <h2 className="font-display text-6xl font-light italic leading-[0.95] tracking-tight md:text-[9rem]">
+        <h2 className="font-display text-4xl font-light italic leading-[0.95] tracking-tight sm:text-6xl md:text-[9rem]">
           Ready to Create.
         </h2>
         <div

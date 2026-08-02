@@ -67,3 +67,37 @@ html.lenis, html.lenis body { height: auto; }
   border-bottom-color: rgba(255, 255, 255, 0.08);
 }
 
+/* ─── Mobile performance & responsiveness ─── */
+@media (max-width: 767px) {
+  /* Let canvas handle touch; prevent browser scroll on hero */
+  #overview {
+    touch-action: none;
+    -webkit-overflow-scrolling: auto;
+  }
+
+  /* GPU compositing for animated elements */
+  .site-nav,
+  #overview canvas {
+    transform: translate3d(0, 0, 0);
+    will-change: transform;
+  }
+
+  /* Tap highlight for interactive elements */
+  [tabindex="0"] {
+    -webkit-tap-highlight-color: rgba(200, 16, 46, 0.15);
+  }
+
+  /* Tighter section spacing on small phones */
+  section {
+    padding-top: 4rem;
+    padding-bottom: 4rem;
+  }
+}
+
+/* Tiny phones (< 375px) */
+@media (max-width: 374px) {
+  .font-display {
+    word-break: break-word;
+  }
+}
+
