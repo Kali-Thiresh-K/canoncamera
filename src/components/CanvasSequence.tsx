@@ -296,29 +296,40 @@ export const CanvasSequence = memo(function CanvasSequence({
       }
     };
 
-    /* ─── touch interaction: always active on mobile ─── */
+    /* ─── touch interaction: only when finger is on the camera image ─── */
     let touchLastY = 0;
-    let touchActive = false;
+    let touchScrubbing = false; // true only when touch started over camera
+
+    /** Check if a touch point is within the drawn camera bounds. */
+    const isTouchOverCamera = (touch: Touch): boolean => {
+      const rect = canvas.getBoundingClientRect();
+      const cx = touch.clientX - rect.left;
+      const cy = touch.clientY - rect.top;
+      const b = drawBoundsRef.current;
+      return cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h;
+    };
 
     const onTouchStart = (e: TouchEvent) => {
       if (!readyRef.current) return;
-      touchLastY = e.touches[0].clientY;
-      touchActive = true;
+      const touch = e.touches[0];
+      touchLastY = touch.clientY;
+      // Only capture for frame scrubbing if finger is on the camera image
+      touchScrubbing = isTouchOverCamera(touch);
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      if (!readyRef.current || !touchActive) return;
+      if (!readyRef.current || !touchScrubbing) return; // not over camera → normal scroll
       const y = e.touches[0].clientY;
       const delta = (touchLastY - y) * TOUCH_SENSITIVITY;
       touchLastY = y;
 
       if (updateProgress(delta)) {
-        e.preventDefault();
+        e.preventDefault(); // only prevent scroll when scrubbing frames
       }
     };
 
     const onTouchEnd = () => {
-      touchActive = false;
+      touchScrubbing = false;
     };
 
     const attachInteraction = () => {
@@ -327,7 +338,7 @@ export const CanvasSequence = memo(function CanvasSequence({
       // Desktop: wheel on canvas only when cursor is over camera
       canvas.addEventListener("wheel", onWheel, { passive: false });
 
-      // Mobile: touch on the entire container for easy swiping
+      // Mobile: touch on the container, but only scrub when finger is on camera
       container.addEventListener("touchstart", onTouchStart, { passive: true });
       container.addEventListener("touchmove", onTouchMove, { passive: false });
       container.addEventListener("touchend", onTouchEnd, { passive: true });

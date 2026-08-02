@@ -69,12 +69,6 @@ html.lenis, html.lenis body { height: auto; }
 
 /* ─── Mobile performance & responsiveness ─── */
 @media (max-width: 767px) {
-  /* Let canvas handle touch; prevent browser scroll on hero */
-  #overview {
-    touch-action: none;
-    -webkit-overflow-scrolling: auto;
-  }
-
   /* GPU compositing for animated elements */
   .site-nav,
   #overview canvas {
